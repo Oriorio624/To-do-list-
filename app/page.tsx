@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 
@@ -98,6 +98,17 @@ export default function TodoList() {
   const [isStickerDialogOpen, setIsStickerDialogOpen] = useState(false)
   const [user, setUser] = useState<any>(null);
   const router = useRouter();
+  const [newPhotoMimeType, setNewPhotoMimeType] = useState<string | undefined>(undefined);
+  const [isPhotoProcessing, setIsPhotoProcessing] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [extractedTasks, setExtractedTasks] = useState<string[]>([]);
+  const [showExtractedTasksDialog, setShowExtractedTasksDialog] = useState(false);
+  const [showPhotoScanDialog, setShowPhotoScanDialog] = useState(false);
+  const [photoScanPhoto, setPhotoScanPhoto] = useState<string | undefined>(undefined);
+  const [photoScanPhotoMimeType, setPhotoScanPhotoMimeType] = useState<string | undefined>(undefined);
+  const [photoScanIsProcessing, setPhotoScanIsProcessing] = useState(false);
+  const [photoScanError, setPhotoScanError] = useState<string | null>(null);
+  const [photoScanExtractedTasks, setPhotoScanExtractedTasks] = useState<string[]>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -163,9 +174,38 @@ export default function TodoList() {
     fetchStickers();
   }, []);
 
-  // Add new task to Supabase
+  // Add new task to Supabase or use AI if photo is present
   const addTask = async () => {
-    if (newTask.trim() === "") return;
+    if (newPhoto) {
+      setIsPhotoProcessing(true);
+      setPhotoError(null);
+      const base64 = newPhoto.split(",")[1];
+      const res = await fetch("/api/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64Image: base64, mimeType: newPhotoMimeType }),
+      });
+      const data = await res.json();
+      setIsPhotoProcessing(false);
+      if (data.error) {
+        setPhotoError(data.error);
+        return;
+      }
+      if (data.content) {
+        const tasks = data.content
+          .split("\n")
+          .map((t: string) => t.trim())
+          .filter(Boolean);
+        if (tasks.length > 0) {
+          setExtractedTasks(tasks);
+          setShowExtractedTasksDialog(true);
+        } else {
+          setPhotoError("No tasks recognized in the image.");
+        }
+      }
+      return;
+    }
+    if (newTask.trim().length === 0) return;
     const insertObj: any = {
       description: newTask,
       status: "not-completed",
@@ -246,23 +286,25 @@ export default function TodoList() {
     }
   }
 
-  const getDaysRemaining = (deadline: Date) => {
-    const today = new Date()
-    const days = differenceInDays(deadline, today)
+  const isValidDeadline = (deadline: any) => deadline instanceof Date && !isNaN(deadline.getTime());
 
-    if (days < 0) return "Overdue"
-    if (days === 0) return "Due today"
-    if (days === 1) return "Tomorrow"
-    return `${days} days left`
-  }
+  const getDaysRemaining = (deadline?: Date) => {
+    if (!isValidDeadline(deadline)) return "";
+    const today = new Date();
+    const days = differenceInDays(deadline, today);
+    if (days < 0) return "Overdue";
+    if (days === 0) return "Due today";
+    if (days === 1) return "Tomorrow";
+    return `${days} days left`;
+  };
 
-  const getDeadlineColor = (deadline: Date) => {
-    const days = differenceInDays(deadline, new Date())
-
-    if (days < 0) return "text-red-600 font-semibold"
-    if (days <= 2) return "text-amber-600 font-semibold"
-    return "text-slate-600"
-  }
+  const getDeadlineColor = (deadline?: Date) => {
+    if (!isValidDeadline(deadline)) return "";
+    const days = differenceInDays(deadline, new Date());
+    if (days < 0) return "text-red-600 font-semibold";
+    if (days <= 2) return "text-amber-600 font-semibold";
+    return "text-slate-600";
+  };
 
   const handlePhotoCapture = () => {
     const input = document.createElement("input")
@@ -277,6 +319,7 @@ export default function TodoList() {
         reader.onload = (e) => {
           const photoUrl = e.target?.result as string
           setNewPhoto(photoUrl)
+          setNewPhotoMimeType(file.type)
         }
         reader.readAsDataURL(file)
       }
@@ -286,27 +329,49 @@ export default function TodoList() {
   }
 
   const handlePhotoUpload = () => {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = "image/*"
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
 
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0]
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
-        const reader = new FileReader()
-        reader.onload = (e) => {
-          const photoUrl = e.target?.result as string
-          setNewPhoto(photoUrl)
-        }
-        reader.readAsDataURL(file)
+        // Convert image to base64
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const base64 = (e.target?.result as string).split(",")[1]; // Remove data:image/...;base64,
+          setNewPhoto(e.target?.result as string);
+          setNewPhotoMimeType(file.type);
+          setPhotoError(null);
+        };
+        reader.readAsDataURL(file);
       }
-    }
+    };
 
-    input.click()
-  }
+    input.click();
+  };
+
+  // Helper to add a task from AI
+  const addTaskFromAI = async (description: string) => {
+    const { data, error } = await supabase
+      .from("todos")
+      .insert({
+        description,
+        status: "not-completed",
+      })
+      .select()
+      .single();
+    if (!error && data) {
+      setTasks((prev) => [
+        ...prev,
+        { ...data, deadline: data.deadline ? new Date(data.deadline) : undefined },
+      ]);
+    }
+  };
 
   const removePhoto = () => {
     setNewPhoto(undefined)
+    setPhotoError(null);
   }
 
   const filteredAndSortedTasks = tasks
@@ -645,6 +710,121 @@ export default function TodoList() {
     setIsDragging(null);
   };
 
+  // Handler for confirming extracted tasks
+  const handleConfirmExtractedTasks = async () => {
+    for (const task of extractedTasks) {
+      await addTaskFromAI(task);
+    }
+    setShowExtractedTasksDialog(false);
+    setExtractedTasks([]);
+    setNewPhoto(undefined);
+    setNewPhotoMimeType(undefined);
+    setNewTask("");
+    setNewDeadline(undefined);
+  };
+
+  // Handler for canceling extracted tasks
+  const handleCancelExtractedTasks = () => {
+    setShowExtractedTasksDialog(false);
+    setExtractedTasks([]);
+    setNewPhoto(undefined);
+    setNewPhotoMimeType(undefined);
+  };
+
+  // Handlers for Photo Scan dialog
+  const openPhotoScanDialog = () => {
+    setShowPhotoScanDialog(true);
+    setPhotoScanPhoto(undefined);
+    setPhotoScanPhotoMimeType(undefined);
+    setPhotoScanIsProcessing(false);
+    setPhotoScanError(null);
+    setPhotoScanExtractedTasks([]);
+  };
+  const closePhotoScanDialog = () => {
+    setShowPhotoScanDialog(false);
+    setPhotoScanPhoto(undefined);
+    setPhotoScanPhotoMimeType(undefined);
+    setPhotoScanIsProcessing(false);
+    setPhotoScanError(null);
+    setPhotoScanExtractedTasks([]);
+  };
+  const handlePhotoScanPhotoUpload = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          setPhotoScanPhoto(e.target?.result as string);
+          setPhotoScanPhotoMimeType(file.type);
+          setPhotoScanError(null);
+        };
+        reader.readAsDataURL(file);
+      }
+    };
+    input.click();
+  };
+  const handlePhotoScanPhotoCapture = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.capture = "environment";
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          setPhotoScanPhoto(e.target?.result as string);
+          setPhotoScanPhotoMimeType(file.type);
+          setPhotoScanError(null);
+        };
+        reader.readAsDataURL(file);
+      }
+    };
+    input.click();
+  };
+  const handlePhotoScanRemovePhoto = () => {
+    setPhotoScanPhoto(undefined);
+    setPhotoScanPhotoMimeType(undefined);
+    setPhotoScanError(null);
+  };
+  const handlePhotoScanExtract = async () => {
+    if (!photoScanPhoto) return;
+    setPhotoScanIsProcessing(true);
+    setPhotoScanError(null);
+    const base64 = photoScanPhoto.split(",")[1];
+    const res = await fetch("/api/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64Image: base64, mimeType: photoScanPhotoMimeType }),
+    });
+    const data = await res.json();
+    setPhotoScanIsProcessing(false);
+    if (data.error) {
+      setPhotoScanError(data.error);
+      return;
+    }
+    if (data.content) {
+      const tasks = data.content
+        .split("\n")
+        .map((t: string) => t.trim())
+        .filter(Boolean);
+      if (tasks.length > 0) {
+        setPhotoScanExtractedTasks(tasks);
+      } else {
+        setPhotoScanError("No tasks recognized in the image.");
+      }
+    }
+  };
+  const handlePhotoScanConfirm = async () => {
+    for (const task of photoScanExtractedTasks) {
+      await addTaskFromAI(task);
+    }
+    closePhotoScanDialog();
+  };
+
   // Only use conditionals in the return:
   return (
     !user ? (
@@ -652,7 +832,7 @@ export default function TodoList() {
     ) : (
       <div
         className={cn(
-          "min-h-screen bg-gradient-to-br p-3 md:p-6 relative select-none",
+          "min-h-screen bg-gradient-to-br p-2 sm:p-4 md:p-6 relative select-none",
           isDarkMode ? "bg-gray-900" : themes[currentTheme].secondary
         )}
         onMouseMove={(e) => {
@@ -676,13 +856,13 @@ export default function TodoList() {
       >
         <div className="max-w-4xl mx-auto">
           <Card className={cn(
-            "bg-gradient-to-r text-white border-0 shadow-lg",
+            "bg-gradient-to-r text-white border-0 shadow-lg w-full",
             isDarkMode 
               ? "from-gray-800 to-gray-700" 
               : themes[currentTheme].primary
           )}>
             <CardHeader className="p-4 md:p-6">
-              <div className="flex justify-between items-center">
+              <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
                 <div>
                   <h2 className="text-2xl font-bold">My Tasks</h2>
                   <p className="text-white/80">
@@ -690,11 +870,11 @@ export default function TodoList() {
                   </p>
                 </div>
                 <div className="flex gap-4">
-                <div className="text-center">
+                <div className="text-center min-w-[80px]">
                     <p className="text-2xl font-bold">{tasks.filter(t => t.status === 'completed').length}</p>
                     <p className="text-white/80">Completed</p>
-                </div>
-                <div className="text-center">
+              </div>
+              <div className="text-center">
                     <p className="text-2xl font-bold">{tasks.filter(t => t.status === 'not-completed').length}</p>
                     <p className="text-white/80">Remaining</p>
                   </div>
@@ -713,106 +893,133 @@ export default function TodoList() {
                   >
                     Sign Out
                   </Button>
-                </div>
               </div>
-            </CardHeader>
-          </Card>
+            </div>
+          </CardHeader>
+        </Card>
 
           <div className="relative">
             <div className={cn(
-              "mb-6 p-4 rounded-lg shadow-lg z-40",
+              "mb-6 p-2 sm:p-4 rounded-lg shadow-lg z-40",
               isDarkMode ? "bg-gray-800" : "bg-white"
             )}>
-              <div className="space-y-4">
-                <div className="space-y-3">
-                  <Input
-                    placeholder="✨ What needs to be done?"
-                    value={newTask}
-                    onChange={(e) => setNewTask(e.target.value)}
+            <div className="space-y-4">
+              <div className="space-y-3">
+                <Input
+                  placeholder="✨ What needs to be done?"
+                  value={newTask}
+                  onChange={(e) => setNewTask(e.target.value)}
                     className={cn(
-                      "text-base h-12 rounded-xl border-2 focus:border-purple-400 bg-white",
+                      "text-base h-12 rounded-xl border-2 focus:border-purple-400 bg-white w-full",
                       isDarkMode ? "border-gray-700 bg-gray-700 text-white" : "border-purple-200"
                     )}
-                  />
+                />
 
-                  <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className={cn(
-                          "w-full h-12 justify-start text-left font-normal rounded-xl border-2 hover:border-purple-400 bg-white",
-                          !newDeadline && "text-muted-foreground",
-                          isDarkMode ? "border-gray-700 bg-gray-700 text-white" : "border-purple-200"
-                        )}
-                      >
-                        <CalendarIcon className="mr-2 h-5 w-5" />
-                        {newDeadline ? format(newDeadline, "PPP") : "📅 Set a deadline"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0">
-                      <Calendar
-                        mode="single"
-                        selected={newDeadline}
-                        onSelect={(date) => {
-                          setNewDeadline(date)
-                          setIsCalendarOpen(false)
-                        }}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handlePhotoCapture}
-                    className={cn(
-                      "flex items-center gap-2 rounded-full border-2 h-10",
-                      isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-blue-200 hover:border-blue-400"
-                    )}
-                  >
-                    <Camera className="h-4 w-4" />📸 Camera
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handlePhotoUpload}
-                    className={cn(
-                      "flex items-center gap-2 rounded-full border-2 h-10",
-                      isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-blue-200 hover:border-blue-400"
-                    )}
-                  >
-                    <ImagePlus className="h-4 w-4" />📁 Upload
-                  </Button>
-                  {newPhoto && (
+                <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                  <PopoverTrigger asChild>
                     <Button
                       variant="outline"
-                      size="sm"
-                      onClick={removePhoto}
                       className={cn(
-                        "flex items-center gap-2 rounded-full border-2 h-10",
-                        isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-red-200 hover:border-red-400"
+                          "w-full h-12 justify-start text-left font-normal rounded-xl border-2 hover:border-purple-400 bg-white",
+                        !newDeadline && "text-muted-foreground",
+                          isDarkMode ? "border-gray-700 bg-gray-700 text-white" : "border-purple-200"
                       )}
                     >
-                      <X className="h-4 w-4" /> Remove Photo
+                      <CalendarIcon className="mr-2 h-5 w-5" />
+                      {newDeadline ? format(newDeadline, "PPP") : "📅 Set a deadline"}
                     </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={newDeadline}
+                      onSelect={(date) => {
+                        setNewDeadline(date)
+                        setIsCalendarOpen(false)
+                      }}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+                <div className="flex flex-wrap gap-2 items-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePhotoCapture}
+                    className={cn(
+                      "flex items-center gap-2 rounded-full border-2 h-10 w-full sm:w-auto",
+                      isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-blue-200 hover:border-blue-400"
+                    )}
+                >
+                  <Camera className="h-4 w-4" />📸 Camera
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePhotoUpload}
+                    className={cn(
+                      "flex items-center gap-2 rounded-full border-2 h-10 w-full sm:w-auto",
+                      isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-blue-200 hover:border-blue-400"
+                    )}
+                >
+                    <ImagePlus className="h-4 w-4" />📁 Upload
+                </Button>
+                {newPhoto && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={removePhoto}
+                      className={cn(
+                        "flex items-center gap-2 rounded-full border-2 h-10 w-full sm:w-auto",
+                        isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-red-200 hover:border-red-400"
+                      )}
+                  >
+                      <X className="h-4 w-4" /> Remove Photo
+                  </Button>
+                )}
+                  {isPhotoProcessing && (
+                    <span className="ml-2 flex items-center gap-1 text-sm text-purple-500 animate-pulse">
+                      <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                      </svg>
+                      Recognizing tasks...
+                    </span>
+                  )}
+                  {photoError && (
+                    <span className="ml-2 text-sm text-red-500">{photoError}</span>
                   )}
                 </div>
 
-                <Button
-                  onClick={addTask}
-                  className={cn(
-                    "w-full h-12 rounded-xl text-white font-medium",
-                    isDarkMode 
-                      ? "bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500"
-                      : `bg-gradient-to-r ${themes[currentTheme].primary} hover:from-purple-600 hover:to-pink-600`
-                  )}
-                >
-                  Add Task ✨
-                </Button>
-              </div>
+              <Button
+                onClick={openPhotoScanDialog}
+                variant="outline"
+                className={cn(
+                  "w-full h-12 rounded-xl font-medium text-base sm:text-lg border-2 border-blue-400 mb-2",
+                  isDarkMode ? "bg-gray-800 text-white hover:bg-gray-700" : "bg-white text-blue-600 hover:bg-blue-50"
+                )}
+              >
+                <Camera className="h-5 w-5 mr-2" /> Photo scan
+              </Button>
+              <Button
+                onClick={addTask}
+                disabled={
+                  isPhotoProcessing ||
+                  (!newPhoto && newTask.trim().length === 0) ||
+                  (newPhoto && newTask.trim().length !== 0)
+                }
+                className={cn(
+                  "w-full h-12 rounded-xl text-white font-medium text-base sm:text-lg",
+                  isDarkMode 
+                    ? "bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500"
+                    : `bg-gradient-to-r ${themes[currentTheme].primary} hover:from-purple-600 hover:to-pink-600`
+                )}
+              >
+                Add Task ✨
+              </Button>
+            </div>
             </div>
 
             <Card className={cn(
@@ -848,8 +1055,8 @@ export default function TodoList() {
                     </SelectContent>
                   </Select>
               </div>
-            </CardContent>
-          </Card>
+          </CardContent>
+        </Card>
 
             <div className="space-y-4 z-40">
               {filteredAndSortedTasks.map((task: Task) => (
@@ -940,10 +1147,12 @@ export default function TodoList() {
                               </Button>
                         </div>
                             <div className="flex flex-wrap items-center gap-2 text-sm">
-                              <span className={cn(getDeadlineColor(task.deadline), task.status === "completed" && "line-through text-gray-500")}>
-                                <Clock className="inline-block w-4 h-4 mr-1" />
-                                {getDaysRemaining(task.deadline)}
-                              </span>
+                              {isValidDeadline(task.deadline) && (
+                                <span className={cn(getDeadlineColor(task.deadline), task.status === "completed" && "line-through text-gray-500")}>
+                                  <Clock className="inline-block w-4 h-4 mr-1" />
+                                  {getDaysRemaining(task.deadline)}
+                                </span>
+                              )}
                               {getStatusBadge(task.status)}
                         </div>
                         {task.photo && (
@@ -968,7 +1177,7 @@ export default function TodoList() {
                   </CardContent>
                 </Card>
               ))}
-            </div>
+                    </div>
 
             <div className="absolute inset-0 pointer-events-none z-10">
               {stickers.map((sticker) => (
@@ -1204,6 +1413,131 @@ export default function TodoList() {
             </DialogContent>
           </Dialog>
         </div>
+
+        <Dialog open={!!showExtractedTasksDialog} onOpenChange={open => setShowExtractedTasksDialog(!!open)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirm Extracted Tasks</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2">
+              <p className="text-sm text-gray-600">AI recognized the following tasks from your image. Please review and edit if needed before adding them to your list:</p>
+              {extractedTasks.map((task, idx) => (
+                <Input
+                  key={idx}
+                  value={task}
+                  onChange={e => {
+                    const updated = [...extractedTasks];
+                    updated[idx] = e.target.value;
+                    setExtractedTasks(updated);
+                  }}
+                  className="mb-2"
+                />
+              ))}
+            </div>
+            <DialogFooter>
+              <Button onClick={handleCancelExtractedTasks} variant="outline">Cancel</Button>
+              <Button onClick={handleConfirmExtractedTasks} className="ml-2">Add to List</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={!!showPhotoScanDialog} onOpenChange={open => setShowPhotoScanDialog(!!open)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Scan Handwritten To-Do List</DialogTitle>
+            </DialogHeader>
+            {photoScanExtractedTasks.length === 0 ? (
+              <>
+                <div className="flex flex-wrap gap-2 items-center mb-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePhotoScanPhotoCapture}
+                    className={cn(
+                      "flex items-center gap-2 rounded-full border-2 h-10 w-full sm:w-auto",
+                      isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-blue-200 hover:border-blue-400"
+                    )}
+                  >
+                    <Camera className="h-4 w-4" />📸 Camera
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePhotoScanPhotoUpload}
+                    className={cn(
+                      "flex items-center gap-2 rounded-full border-2 h-10 w-full sm:w-auto",
+                      isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-blue-200 hover:border-blue-400"
+                    )}
+                  >
+                    <ImagePlus className="h-4 w-4" />📁 Upload
+                  </Button>
+                  {photoScanPhoto && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePhotoScanRemovePhoto}
+                      className={cn(
+                        "flex items-center gap-2 rounded-full border-2 h-10 w-full sm:w-auto",
+                        isDarkMode ? "border-gray-700 bg-gray-700 text-white hover:bg-gray-600" : "border-red-200 hover:border-red-400"
+                      )}
+                    >
+                      <X className="h-4 w-4" /> Remove Photo
+                    </Button>
+                  )}
+                </div>
+                {photoScanPhoto && (
+                  <div className="mb-2">
+                    <img src={photoScanPhoto} alt="To-Do Scan" className="max-h-40 rounded-lg mx-auto" />
+                  </div>
+                )}
+                {photoScanIsProcessing && (
+                  <span className="flex items-center gap-1 text-sm text-purple-500 animate-pulse">
+                    <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                    </svg>
+                    Recognizing tasks...
+                  </span>
+                )}
+                {photoScanError && (
+                  <span className="text-sm text-red-500">{photoScanError}</span>
+                )}
+                <DialogFooter>
+                  <Button
+                    onClick={handlePhotoScanExtract}
+                    disabled={!photoScanPhoto || photoScanIsProcessing}
+                    className="w-full"
+                  >
+                    Extract Tasks
+                  </Button>
+                  <Button onClick={closePhotoScanDialog} variant="outline" className="w-full">Cancel</Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-600">AI recognized the following tasks from your image. Please review and edit if needed before adding them to your list:</p>
+                  {photoScanExtractedTasks.map((task, idx) => (
+                    <Input
+                      key={idx}
+                      value={task}
+                      onChange={e => {
+                        const updated = [...photoScanExtractedTasks];
+                        updated[idx] = e.target.value;
+                        setPhotoScanExtractedTasks(updated);
+                      }}
+                      className="mb-2"
+                    />
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button onClick={closePhotoScanDialog} variant="outline">Cancel</Button>
+                  <Button onClick={handlePhotoScanConfirm} className="ml-2">Add to List</Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     )
   )
