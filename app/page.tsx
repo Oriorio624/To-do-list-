@@ -135,6 +135,7 @@ export default function TodoList() {
       const { data, error } = await supabase
         .from('todos')
         .select('*')
+        .eq('user_id', user.id)
         .order('inserted_at', { ascending: true });
       if (error) {
         console.error(error);
@@ -155,6 +156,7 @@ export default function TodoList() {
       const { data, error } = await supabase
         .from('stickers')
         .select('*')
+        .eq('user_id', user.id)
         .order('inserted_at', { ascending: true });
       if (error) {
         console.error(error);
@@ -210,6 +212,7 @@ export default function TodoList() {
       description: newTask,
       status: "not-completed",
       photo: newPhoto,
+      user_id: user.id,
     };
     if (newDeadline) {
       insertObj.deadline = newDeadline.toISOString();
@@ -238,6 +241,7 @@ export default function TodoList() {
       .from('todos')
       .update({ status })
       .eq('id', id)
+      .eq('user_id', user.id)
       .select()
       .single();
     if (error) {
@@ -252,7 +256,8 @@ export default function TodoList() {
     const { error } = await supabase
       .from('todos')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', user.id);
     if (error) {
       console.error(error);
       return;
@@ -358,6 +363,7 @@ export default function TodoList() {
       .insert({
         description,
         status: "not-completed",
+        user_id: user.id,
       })
       .select()
       .single();
@@ -447,6 +453,7 @@ export default function TodoList() {
               scale: newSticker.scale,
               width: Math.round(newSticker.size.width),
               height: Math.round(newSticker.size.height),
+              user_id: user.id,
             })
             .select()
             .single();
@@ -495,6 +502,7 @@ export default function TodoList() {
             scale: newSticker.scale,
             width: Math.round(newSticker.size.width),
             height: Math.round(newSticker.size.height),
+            user_id: user.id,
           })
           .select()
           .single();
@@ -528,7 +536,8 @@ export default function TodoList() {
         width: Math.round(sticker.size.width),
         height: Math.round(sticker.size.height),
       })
-      .eq('id', sticker.id);
+      .eq('id', sticker.id)
+      .eq('user_id', user.id);
   };
 
   // Update sticker position/size/rotation in state and Supabase
@@ -622,7 +631,8 @@ export default function TodoList() {
     await supabase
       .from('stickers')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', user.id);
     setStickers(stickers => stickers.filter(sticker => sticker.id !== id));
   };
 
