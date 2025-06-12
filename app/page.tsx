@@ -135,7 +135,6 @@ export default function TodoList() {
       const { data, error } = await supabase
         .from('todos')
         .select('*')
-        .eq('user_id', user.id)
         .order('inserted_at', { ascending: true });
       if (error) {
         console.error(error);
@@ -156,7 +155,6 @@ export default function TodoList() {
       const { data, error } = await supabase
         .from('stickers')
         .select('*')
-        .eq('user_id', user.id)
         .order('inserted_at', { ascending: true });
       if (error) {
         console.error(error);
@@ -212,7 +210,6 @@ export default function TodoList() {
       description: newTask,
       status: "not-completed",
       photo: newPhoto,
-      user_id: user.id,
     };
     if (newDeadline) {
       insertObj.deadline = newDeadline.toISOString();
@@ -241,7 +238,6 @@ export default function TodoList() {
       .from('todos')
       .update({ status })
       .eq('id', id)
-      .eq('user_id', user.id)
       .select()
       .single();
     if (error) {
@@ -256,8 +252,7 @@ export default function TodoList() {
     const { error } = await supabase
       .from('todos')
       .delete()
-      .eq('id', id)
-      .eq('user_id', user.id);
+      .eq('id', id);
     if (error) {
       console.error(error);
       return;
@@ -363,7 +358,6 @@ export default function TodoList() {
       .insert({
         description,
         status: "not-completed",
-        user_id: user.id,
       })
       .select()
       .single();
@@ -408,11 +402,31 @@ export default function TodoList() {
     ))
   }
 
-  const saveEdit = (taskId: string, newDescription: string, newDeadline: Date) => {
+  const saveEdit = async (taskId: string, newDescription: string, newDeadline: Date | undefined) => {
+    const updateObj: any = {
+      description: newDescription,
+    };
+    if (newDeadline) {
+      updateObj.deadline = newDeadline.toISOString();
+    } else {
+      updateObj.deadline = null;
+    }
+    const { data, error } = await supabase
+      .from('todos')
+      .update(updateObj)
+      .eq('id', taskId)
+      .select()
+      .single();
+    if (error) {
+      alert('Failed to update task: ' + error.message);
+      return;
+    }
     setTasks(tasks.map(task =>
-      task.id === taskId ? { ...task, description: newDescription, deadline: newDeadline, isEditing: false } : task
-    ))
-  }
+      task.id === taskId
+        ? { ...data, deadline: data.deadline ? new Date(data.deadline) : undefined, isEditing: false }
+        : task
+    ));
+  };
 
   const cancelEdit = (taskId: string) => {
     setTasks(tasks.map(task =>
@@ -453,7 +467,6 @@ export default function TodoList() {
               scale: newSticker.scale,
               width: Math.round(newSticker.size.width),
               height: Math.round(newSticker.size.height),
-              user_id: user.id,
             })
             .select()
             .single();
@@ -502,7 +515,6 @@ export default function TodoList() {
             scale: newSticker.scale,
             width: Math.round(newSticker.size.width),
             height: Math.round(newSticker.size.height),
-            user_id: user.id,
           })
           .select()
           .single();
@@ -536,8 +548,7 @@ export default function TodoList() {
         width: Math.round(sticker.size.width),
         height: Math.round(sticker.size.height),
       })
-      .eq('id', sticker.id)
-      .eq('user_id', user.id);
+      .eq('id', sticker.id);
   };
 
   // Update sticker position/size/rotation in state and Supabase
@@ -631,8 +642,7 @@ export default function TodoList() {
     await supabase
       .from('stickers')
       .delete()
-      .eq('id', id)
-      .eq('user_id', user.id);
+      .eq('id', id);
     setStickers(stickers => stickers.filter(sticker => sticker.id !== id));
   };
 
@@ -878,7 +888,7 @@ export default function TodoList() {
                   <p className="text-white/80">
                     {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'} total
                   </p>
-                </div>
+              </div>
                 <div className="flex gap-4">
                 <div className="text-center min-w-[80px]">
                     <p className="text-2xl font-bold">{tasks.filter(t => t.status === 'completed').length}</p>
@@ -1000,8 +1010,8 @@ export default function TodoList() {
                   )}
                   {photoError && (
                     <span className="ml-2 text-sm text-red-500">{photoError}</span>
-                  )}
-                </div>
+                )}
+              </div>
 
               <Button
                 onClick={openPhotoScanDialog}
@@ -1065,8 +1075,8 @@ export default function TodoList() {
                     </SelectContent>
                   </Select>
               </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
 
             <div className="space-y-4 z-40">
               {filteredAndSortedTasks.map((task: Task) => (
@@ -1106,7 +1116,7 @@ export default function TodoList() {
                                   className="w-full justify-start text-left font-normal"
                                 >
                                   <CalendarIcon className="mr-2 h-4 w-4" />
-                                  {format(task.deadline, "PPP")}
+                                  {isValidDeadline(task.deadline) ? format(task.deadline, "PPP") : "No deadline"}
                                 </Button>
                               </PopoverTrigger>
                               <PopoverContent className="w-auto p-0">
@@ -1123,7 +1133,7 @@ export default function TodoList() {
                             <div className="flex gap-2">
                               <Button
                                 size="sm"
-                                onClick={() => saveEdit(task.id, task.description, task.deadline)}
+                                onClick={async () => await saveEdit(task.id, task.description, task.deadline)}
                                 className="flex-1"
                               >
                                 <Check className="h-4 w-4 mr-2" />
@@ -1145,8 +1155,8 @@ export default function TodoList() {
                             <div className="flex items-center gap-2 mb-2">
                               {getStatusIcon(task.status)}
                               <span className={cn("font-medium", task.status === "completed" && "line-through text-gray-500")}>
-                                {task.description}
-                              </span>
+                          {task.description}
+                          </span>
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1164,7 +1174,7 @@ export default function TodoList() {
                                 </span>
                               )}
                               {getStatusBadge(task.status)}
-                        </div>
+                      </div>
                         {task.photo && (
                                 <div className="mt-2 relative inline-block">
                                   <img src={task.photo} alt="Task" className="h-20 w-20 object-cover rounded-lg" />
@@ -1399,7 +1409,7 @@ export default function TodoList() {
                     checked={isDarkMode}
                     onCheckedChange={setIsDarkMode}
                   />
-                </div>
+                    </div>
                 <div className="space-y-2">
                   <Label>Theme</Label>
                   <div className="grid grid-cols-2 gap-2">
@@ -1493,12 +1503,12 @@ export default function TodoList() {
                     >
                       <X className="h-4 w-4" /> Remove Photo
                     </Button>
-                  )}
-                </div>
+          )}
+        </div>
                 {photoScanPhoto && (
                   <div className="mb-2">
                     <img src={photoScanPhoto} alt="To-Do Scan" className="max-h-40 rounded-lg mx-auto" />
-                  </div>
+      </div>
                 )}
                 {photoScanIsProcessing && (
                   <span className="flex items-center gap-1 text-sm text-purple-500 animate-pulse">
@@ -1548,7 +1558,7 @@ export default function TodoList() {
             )}
           </DialogContent>
         </Dialog>
-      </div>
+    </div>
     )
   )
 }
